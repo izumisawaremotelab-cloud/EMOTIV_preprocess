@@ -1,5 +1,69 @@
+import os
 import mne
 import numpy as np
+
+def create_mne_montage_from_raw_txt(sub_num, data_dir="data/raw"):
+    input_filename = os.path.join(data_dir, f"sub{sub_num}.TXT")
+    
+    if not os.path.exists(input_filename):
+        raise FileNotFoundError(f"デジタイザファイルが見つかりません: {input_filename}")
+
+    # デジタイザデータの全行読み込み
+    raw_coords = []
+    with open(input_filename, 'r', encoding='utf-8', errors='ignore') as f:
+        for idx, line in enumerate(f):
+            if idx >= 74:  # 一点につき2行のデータ、基準点5点 + 32ch
+                break
+            parts = line.split()
+            if len(parts) >= 4:
+                try:
+                    # X, Y, Z 座標を抽出
+                    raw_coords.append([float(parts[1]), float(parts[2]), float(parts[3])])
+                except ValueError:
+                    continue
+
+    coords_matrix = np.array(raw_coords)
+
+    # --- 2. 基準点（ランドマーク）とEEG電極の抽出 ---
+    # デジタイザの生データ単位（通常はcmまたはmm）を、MNEの標準である「メートル」に変換
+    # ※元のデータがmmの場合は 1000.0、cmの場合は 100.0 で割ってください（ここでは暫定でcm想定の100固定）
+    scale = 100.0
+    
+    # MATLAB: data(1:2:10, 1:3) -> 基準点
+    # 0: Nz, 1: Iz, 2: RPA, 3: LPA, 4: Cz
+    landmarks_m = coords_matrix[0:10:2] / scale
+    
+    # MATLAB: data(11:2:74, 1:3) -> 32個のEEG電極
+    eeg_coords_m = coords_matrix[10:74:2] / scale
+
+    # --- 3. 辞書型の作成 ---
+    # ランドマーク位置の対応付け
+    fiducials = {
+        'nasion': landmarks_m[0],   # Nz
+        'rpa': landmarks_m[2],      # RPA
+        'lpa': landmarks_m[3]       # LPA
+    }
+
+    # 32チャネルのラベル（MATLAB順）
+    clean_labels = [
+        'Cz', 'Fz', 'FP1', 'F7', 'F3', 'FC1', 'C3', 'FC5', 'FT9', 'T7',
+        'CP5', 'CP1', 'P3', 'P7', 'PO9', 'O1', 'Pz', 'Oz', 'O2', 'PO10',
+        'P8', 'P4', 'CP2', 'CP6', 'T8', 'FT10', 'FC6', 'C4', 'FC2', 'F4', 'F8', 'Fp2'
+    ]
+
+    ch_pos = {label: coord for label, coord in zip(clean_labels, eeg_coords_m)}
+
+    # --- 4. MNEカスタムモンタージュの生成 ---
+    # デジタイザ空間（まだ標準脳に合わせる前）なので coord_frame='unknown' で開始
+    montage = mne.channels.make_dig_montage(
+        ch_pos=ch_pos,
+        nasion=fiducials['nasion'],
+        lpa=fiducials['lpa'],
+        rpa=fiducials['rpa']
+    )
+    
+    print(f"[INFO] 生デジタイザデータからMNEモンタージュを作成しました。")
+    return montage
 
 def crop_raw(file_path):
     # データ読み込み

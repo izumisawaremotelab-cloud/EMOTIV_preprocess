@@ -2,7 +2,8 @@ import os
 import mne
 import numpy as np
 
-def create_mne_montage_from_raw_txt(sub_num, data_dir="data/raw"):
+def mne_montage(sub_num, data_dir):
+    #デジタイザデータはsubxx.TXTの命名規則を想定
     input_filename = os.path.join(data_dir, f"sub{sub_num}.TXT")
     
     if not os.path.exists(input_filename):
@@ -65,9 +66,10 @@ def create_mne_montage_from_raw_txt(sub_num, data_dir="data/raw"):
     print(f"[INFO] 生デジタイザデータからMNEモンタージュを作成しました。")
     return montage
 
-def crop_raw(file_path):
-    # データ読み込み
-    raw = mne.io.read_raw_bdf(file_path, preload=True)
+def crop_raw(sub_num, data_dir):
+    # データ読み込み、入力データはsubxx.bdfでの命名規則を想定
+    input_filename = os.path.join(data_dir, f"sub{sub_num}.bdf")
+    raw = mne.io.read_raw_bdf(input_filename, preload=True)
 
     # マーカー値と時間情報の対応リスト
     events_list = []

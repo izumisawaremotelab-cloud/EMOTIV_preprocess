@@ -1,0 +1,70 @@
+# hyperscan_eeg
+
+2者間脳波同期（ハイパースキャニング）実験の前処理・脳間同期指標算出パッケージ。
+
+`src/hyperscan_eeg/` は特定の実験デザインに依存しない汎用ライブラリ、
+`configs/` が個々の実験固有の値（被験者・ペア対応・条件・マーカーコード等）を
+注入する設定ファイル、という構成で分離している。**別の実験に転用する場合は
+`configs/` に新しい設定ファイルを追加するだけでよく、`src/hyperscan_eeg/` は
+変更不要。**
+
+## セットアップ
+
+```bash
+pip install -r requirements.txt
+pip install -e .
+```
+
+## ディレクトリ構成
+
+```
+src/hyperscan_eeg/   汎用ライブラリ本体（実験固有の値を持たない）
+  config.py            設定スキーマ（データクラス定義のみ）
+  presets.py           ハードウェア／一般的なEEG研究慣習に基づく再利用可能な値
+                        （EMOTIV Flex Saline 32ch電極配置、標準5周波数帯域 等）
+  io.py                生EEG(BDF)読込・デジタイザモンタージュ生成・マーカー抽出
+  preprocessing.py     区間切り出し・区間分割(SegmentPlan)・フィルタ・ICA
+  phase.py             2者間エポック結合（位相計算の前段）
+  connectivity.py      帯域別の脳間同期指標（PLV/PSI等）算出
+  visualization.py     ヒートマップ・棒グラフ
+  pipeline.py          上記を束ねる高水準オーケストレーション関数
+  cli.py               CLIエントリポイント（--config-module で実験設定を切替可能）
+
+configs/              実験固有の設定（ここが「各自で用意する」部分）
+  gattai_hyperscan_study.py   本実験（合体ゲーム課題）の具体的な値
+                               （被験者・ペア対応・条件・マーカーコード・
+                                 ゲーム状態の区間分割定義 等）
+
+scripts/
+  run_preprocessing.py  前処理実行スクリプト（configsを読み込んで実行）
+  run_analysis.py       同期指標算出実行スクリプト（同上）
+
+data/                 raw / digitizer / preprocessed / results / figures
+```
+
+## 実行
+
+```bash
+python scripts/run_preprocessing.py
+python scripts/run_analysis.py
+```
+
+実験固有パラメータ（被験者・ペア対応・条件・マーカーコード・ゲーム状態の
+区間分割）は `configs/gattai_hyperscan_study.py` を編集する。
+同期指標の種類（PLV/PSI等）や区間分割の有無など、実行そのものに関わる
+制御パラメータは各スクリプト冒頭の `# ==== 実行制御パラメータ ====`
+ブロックを編集する。
+
+## 別の実験への転用
+
+1. `configs/gattai_hyperscan_study.py` を複製し、新しいファイル名で保存する
+   （例: `configs/my_other_study.py`）。
+2. `ExperimentDesign`（被験者・実施したペア・条件・ゲーム状態の区間分割）、
+   `MarkerConfig`（マーカーコード）、`MontageConfig`（電極配置）を
+   自分の実験の値に書き換える。
+   - `pairs` は総当たりを仮定せず、実際に実施したペアを列挙する
+     （総当たりの場合のみ `all_subject_pairs()` を利用してよい）。
+   - `condition_segments` は `SegmentPlan(labels=..., boundary_markers=...)` で
+     境界マーカーとラベルを対応付ける。状態数が増減しても、この定義を
+     差し替えるだけで対応できる。
+3. `scripts/*.py` のインポート元を新しい設定ファイルに変更する。

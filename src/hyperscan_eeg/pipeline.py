@@ -53,11 +53,17 @@ def run_subject_preprocessing(
     logger.info("=== 前処理開始: subject%d / %s ===", subject, condition)
 
     raw = io.load_raw_eeg(paths.raw_file(subject, condition))
-    events = io.get_marker_events(raw, marker_cfg)
+    events = io.get_marker_events(raw)
     raw_task = preprocessing.crop_to_task_window(raw, events, marker_cfg)
 
     montage = io.build_dig_montage(subject, paths.digitizer_dir, montage_cfg)
     raw_task.set_montage(montage, match_case=False, on_missing="warn")
+    visualization.plot_montage(
+        montage,
+        title=f"sub{subject}_{condition}",
+        save_path=paths.figures_dir / condition / f"sub{subject}_montage.png",
+        show=ica_cfg.interactive,
+    )
 
     raw_eeg = preprocessing.select_eeg_channels(raw_task, aux_prefixes)
     raw_filtered = preprocessing.apply_bandpass_notch(raw_eeg, filter_cfg)
@@ -66,6 +72,12 @@ def run_subject_preprocessing(
     if ica_cfg.interactive:
         preprocessing.review_ica_interactively(ica, raw_filtered)
     raw_clean = preprocessing.apply_ica(raw_filtered, ica)
+    visualization.plot_ica_overlay(
+        ica,
+        raw_filtered,
+        save_path=paths.figures_dir / condition / f"sub{subject}_ica_overlay.png",
+        show=ica_cfg.interactive,
+    )
 
     save_path = paths.preprocessed_file(subject, condition)
     save_path.parent.mkdir(parents=True, exist_ok=True)
@@ -94,7 +106,7 @@ def run_pair_connectivity(
     method: str = "plv",
     save_csv: bool = True,
     save_figures: bool = False,
-) -> dict[str, pd.DataFrame]:
+) -> dict[str, dict[str, pd.DataFrame]]:
     """1ペア・1条件分の脳間同期指標を、区間ごと・周波数帯域ごとに算出する。
 
     Args:
@@ -104,7 +116,7 @@ def run_pair_connectivity(
         method: `mne_connectivity.spectral_connectivity_epochs` の method。
 
     Returns:
-        区間ラベルをキーとした {区間名: (電極ペア x 周波数帯域) DataFrame}。
+        {区間名: {帯域名: (p1側電極 x p2側電極) DataFrame}}。
     """
     sub_a, sub_b = pair
     pair_label = f"pair_{sub_a:02d}_{sub_b:02d}"
@@ -122,21 +134,28 @@ def run_pair_connectivity(
             f"2者間で検出された区間ラベルが一致しません: {sorted(segments_a)} vs {sorted(segments_b)}"
         )
 
-    results: dict[str, pd.DataFrame] = {}
+    results: dict[str, dict[str, pd.DataFrame]] = {}
     for label in segments_a:
         logger.info("-> 区間: %s", label)
-        combined_epochs, sfreq = phase.combine_dyad_epochs(segments_a[label], segments_b[label])
-        df = connectivity.compute_all_bands(combined_epochs, sfreq, bands, method=method)
-        results[label] = df
+        combined_raw, sfreq = phase.combine_dyad_raw(segments_a[label], segments_b[label])
+        band_matrices = connectivity.compute_all_bands(combined_raw, sfreq, bands, method=method)
+        results[label] = band_matrices
 
-        if save_csv:
-            csv_path = paths.results_dir / condition / label / f"{pair_label}_{method}.csv"
-            csv_path.parent.mkdir(parents=True, exist_ok=True)
-            df.to_csv(csv_path, index_label="Electrode_Pair")
-            logger.info("CSVを保存しました: %s", csv_path)
+        for band_name, matrix in band_matrices.items():
+            if save_csv:
+                csv_path = (
+                    paths.results_dir / condition / label / f"{pair_label}_{method}_{band_name}.csv"
+                )
+                csv_path.parent.mkdir(parents=True, exist_ok=True)
+                matrix.to_csv(csv_path)
+                logger.info("CSVを保存しました: %s", csv_path)
 
-        if save_figures:
-            fig_path = paths.figures_dir / condition / label / f"{pair_label}_{method}.png"
-            visualization.plot_band_heatmap(df, f"{pair_label} / {condition} / {label}", fig_path)
+            if save_figures:
+                fig_path = (
+                    paths.figures_dir / condition / label / f"{pair_label}_{method}_{band_name}.png"
+                )
+                visualization.plot_band_heatmap(
+                    matrix, f"{pair_label} / {condition} / {label} / {band_name}", fig_path
+                )
 
     return results

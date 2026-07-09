@@ -5,6 +5,16 @@
 （Phase Slope Index、位相スロープ指数）とPLVは定義の異なる指標であるため、
 この不一致はバグとして扱い、`method` を明示的に指定する設計に改めた
 （詳細はモジュールの解説を参照）。
+
+補足（重要）: PLV等のエポック平均を前提とする指標は、1エポックしか
+与えないと常に自明な値になる。`mne_connectivity` の `_PLVEst.accumulate`
+は各エポックについて単位modulusの複素数 `csd_xy / |csd_xy|` を加算し、
+`compute_con` で `n_epochs` 個の平均の絶対値を取るだけなので、
+`n_epochs=1` なら `|csd_xy / |csd_xy|| = 1` が定義上常に成り立つ
+（＝ヒートマップが全部1になるバグの直接原因）。本モジュールは連続データ
+（`phase.combine_dyad_raw` が返す1つながりのRaw）を対象にするため、
+`compute_band_connectivity` 内で毎回、固定長・非重複の疑似エポックに
+分割してから `spectral_connectivity_epochs` に渡す。
 """
 
 from __future__ import annotations
@@ -17,6 +27,7 @@ import pandas as pd
 from mne_connectivity import spectral_connectivity_epochs
 
 from .config import FrequencyBand
+from .phase import make_pseudo_trial_epochs
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +49,16 @@ logger = logging.getLogger(__name__)
 # `cwt_n_cycles` に明示的な配列を渡せば本ヒューリスティックは使われない。
 _MIN_CYCLES = 3.0
 _MAX_CYCLES = 15.0
+
+# 疑似エポック長を決める際の既定値。
+#
+# `ideal_epoch_length = 2 * worst_edge + _CORE_SECONDS` の形で、
+# ウェーブレットの片側エッジ効果幅(worst_edge)を両側分確保した上に、
+# 歪みのない「有効な中心区間」を _CORE_SECONDS 秒だけ上乗せする。
+# 区間長が短くこの理想値では _MIN_EPOCHS 個のエポックを確保できない場合は
+# `duration / _MIN_EPOCHS` まで縮小する（縮小時は必ず警告ログを出す）。
+_CORE_SECONDS = 2.0
+_MIN_EPOCHS = 3
 
 
 def _paired_channel_indices(
@@ -62,81 +83,130 @@ def _paired_channel_indices(
     return idx_a, idx_b, names_a
 
 
+def _determine_epoch_length(
+    freqs: np.ndarray,
+    cwt_n_cycles: np.ndarray,
+    duration: float,
+    core_seconds: float,
+    min_epochs: int,
+    method: str,
+) -> float:
+    """帯域の周波数構成とウェーブレットのエッジ効果から疑似エポック長を決める。
+
+    Raises:
+        ValueError: 縮小してもなお `min_epochs` に満たない疑似エポックしか
+            作れないほど区間が短い場合。
+    """
+    worst_edge = np.max(cwt_n_cycles / freqs)  # 片側のエッジ効果幅（秒）
+    ideal_epoch_length = 2 * worst_edge + core_seconds
+
+    epoch_length = ideal_epoch_length
+    if duration / epoch_length < min_epochs:
+        epoch_length = duration / min_epochs
+        logger.warning(
+            "区間長(%.1fs)に対し理想的な疑似エポック長(%.1fs、片側エッジ効果幅%.1fs)"
+            "では%d個のエポックを確保できないため、%.1fsに縮小します"
+            "（低周波数ビンの推定精度が低下する可能性があります）。",
+            duration, ideal_epoch_length, worst_edge, min_epochs, epoch_length,
+        )
+
+    min_cycle_duration = 1.0 / np.min(freqs)
+    if epoch_length < min_cycle_duration or duration / epoch_length < 2:
+        raise ValueError(
+            f"区間長({duration:.1f}s)が短すぎるため、'{method}'の算出に必要な"
+            f"疑似エポック(最低2個、各{min_cycle_duration:.1f}s以上)を作成できません。"
+        )
+    return epoch_length
+
+
 def compute_band_connectivity(
-    combined_epochs: mne.Epochs,
+    combined_raw: mne.io.BaseRaw,
     sfreq: float,
     freqs: np.ndarray,
     method: str = "plv",
     suffix_a: str = "_p1",
     suffix_b: str = "_p2",
     cwt_n_cycles: np.ndarray | float | None = None,
-) -> tuple[np.ndarray, list[str]]:
-    """指定した周波数帯域における帯域平均済みの脳間同期指標を算出する。
+    core_seconds: float = _CORE_SECONDS,
+    min_epochs: int = _MIN_EPOCHS,
+) -> pd.DataFrame:
+    """指定した周波数帯域における、電極ペア全組み合わせの脳間同期指標を算出する。
 
     Args:
-        combined_epochs: `phase.combine_dyad_epochs` で結合したEpochs。
+        combined_raw: `phase.combine_dyad_raw` で結合した連続Raw。
         sfreq: サンプリング周波数。
         freqs: 解析対象の周波数ビン配列。
         method: `mne_connectivity.spectral_connectivity_epochs` の method
             （例: 'plv', 'psi', 'coh', 'wpli'）。
         cwt_n_cycles: Morletウェーブレットのサイクル数。None の場合、
             `freqs / 2` を [3, 15] にクリップして自動決定する。
+        core_seconds: 疑似エポック長を決める際に、両側エッジ効果幅の上に
+            上乗せする「歪みのない中心区間」の長さ（秒）。
+        min_epochs: 確保したい疑似エポック数の下限。区間が短くこれを
+            満たせない場合は疑似エポック長を縮小する。
 
     Returns:
-        (電極ペアごとの帯域平均値, 電極ペア名リスト) のタプル。
+        p1側電極(行) x p2側電極(列)の32x32相当のDataFrame（帯域平均済み）。
     """
     idx_a, idx_b, pair_names = _paired_channel_indices(
-        combined_epochs.ch_names, suffix_a, suffix_b
+        combined_raw.ch_names, suffix_a, suffix_b
     )
+    n = len(idx_a)
 
     if cwt_n_cycles is None:
         cwt_n_cycles = np.clip(freqs / 2.0, _MIN_CYCLES, _MAX_CYCLES)
-        duration = combined_epochs.tmax - combined_epochs.tmin
-        worst_edge = np.max(cwt_n_cycles / freqs)  # 片側のエッジ効果幅（秒）
-        if 2 * worst_edge > duration:
-            logger.warning(
-                "区間長(%.1fs)に対しウェーブレットのエッジ効果幅(%.1fs x2)が大きく、"
-                "低周波数ビンの推定精度が低下する可能性があります。",
-                duration, worst_edge,
-            )
+
+    duration = combined_raw.times[-1]
+    epoch_length = _determine_epoch_length(
+        freqs, cwt_n_cycles, duration, core_seconds, min_epochs, method
+    )
+    epochs = make_pseudo_trial_epochs(combined_raw, epoch_length)
+    logger.info(
+        "疑似エポック数: %d個（各%.1fs、区間長%.1fs）", len(epochs), epoch_length, duration
+    )
+
+    seed_idx = np.repeat(idx_a, n)
+    target_idx = np.tile(idx_b, n)
 
     con = spectral_connectivity_epochs(
-        combined_epochs,
+        epochs,
         method=method,
         mode="cwt_morlet",
         cwt_freqs=freqs,
         cwt_n_cycles=cwt_n_cycles,
-        indices=(idx_a, idx_b),
+        indices=(seed_idx, target_idx),
         sfreq=sfreq,
         verbose=False,
     )
 
-    # 形状 (Shape): (ペア数, 周波数数[, 時間数])。時間軸がある場合はさらに平均する。
+    # 形状 (Shape): (電極ペア数=n*n, 周波数数[, 時間数])。時間軸があればさらに平均する。
     raw_outputs = con.get_data()
     band_averaged = np.mean(raw_outputs, axis=tuple(range(1, raw_outputs.ndim)))
-    return band_averaged, pair_names
+    matrix = band_averaged.reshape(n, n)
+
+    index = pd.Index(pair_names, name="ch_p1")
+    columns = pd.Index(pair_names, name="ch_p2")
+    return pd.DataFrame(matrix, index=index, columns=columns)
 
 
 def compute_all_bands(
-    combined_epochs: mne.Epochs,
+    combined_raw: mne.io.BaseRaw,
     sfreq: float,
     bands: tuple[FrequencyBand, ...],
     method: str = "plv",
     suffix_a: str = "_p1",
     suffix_b: str = "_p2",
-) -> pd.DataFrame:
-    """複数の周波数帯域について同期指標をまとめて算出し、DataFrameで返す。"""
-    columns: dict[str, np.ndarray] = {}
-    pair_labels: list[str] | None = None
+) -> dict[str, pd.DataFrame]:
+    """複数の周波数帯域について同期指標をまとめて算出する。
 
+    Returns:
+        帯域名 -> (p1側電極 x p2側電極)の同期指標行列 のdict。
+    """
+    results: dict[str, pd.DataFrame] = {}
     for band in bands:
         logger.info("計算中: %s帯域 (%s)", band.name, method)
-        values, pair_names = compute_band_connectivity(
-            combined_epochs, sfreq, band.freqs(), method=method,
+        results[band.name] = compute_band_connectivity(
+            combined_raw, sfreq, band.freqs(), method=method,
             suffix_a=suffix_a, suffix_b=suffix_b,
         )
-        if pair_labels is None:
-            pair_labels = [f"{n}{suffix_a} <-> {n}{suffix_b}" for n in pair_names]
-        columns[band.name] = values
-
-    return pd.DataFrame(columns, index=pair_labels)
+    return results

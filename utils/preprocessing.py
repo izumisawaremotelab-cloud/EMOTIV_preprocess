@@ -114,8 +114,16 @@ def apply_filters(raw):
 def run_ica(raw):
     from mne.preprocessing import ICA
     
+    AUX_PREFIXES = ('CQ.', 'EQ.', 'MOT.',
+                    'TimestampS', 'TimestampMs', 'OrTimestamp',
+                    'Counter', 'Interpolated', 'RawCq', 'Battery', 'BatteryPercent',
+                    'FwBuffer', 'FwClock', 'MarkerHardware')
+    eeg_chs = [ch for ch in raw.ch_names
+               if not ch.startswith(AUX_PREFIXES)]
+    raw_eeg = raw.copy().pick_channels(eeg_chs)
+
     # ハイパス (1Hz)　（推奨設定、バンドパスと重複してるが一応）
-    raw_for_ica = raw.copy().filter(l_freq=1.0, h_freq=None, fir_design='firwin')
+    raw_for_ica = raw_eeg.copy().filter(l_freq=1.0, h_freq=None, fir_design='firwin')
     
     # EEGLAB互換設定
     ica = ICA(n_components=None, random_state=97, method='infomax', fit_params=dict(extended=True))
@@ -126,13 +134,13 @@ def run_ica(raw):
     # 目視での除去
     # 画面を閉じると、選択した成分が自動で ica.exclude に格納される
     print("\n[INFO] 画面上で除外したいノイズ成分（瞬き・心拍等）を選択し、画面を閉じてください。")
-    ica.plot_sources(raw, block=True)
+    ica.plot_sources(raw_eeg, block=True)
     
     # 選択された成分を確認用に出力
     print(f"除外対象として選択された成分: {ica.exclude}")
     
     # 選択したノイズ成分を差し引く
-    raw_clean = raw.copy()
+    raw_clean = raw_eeg.copy()
     ica.apply(raw_clean)
 
     # --- 除去後の波形確認プロットを追加 ---

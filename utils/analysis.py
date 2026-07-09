@@ -11,25 +11,26 @@ def prepare_whole_task_epochs(raw_p1, raw_p2):
     
     # データの最初（0秒）に1つだけダミーのイベントを配置して、全時間を1つのエポックにする
     # イベント形式: [サンプル位置, 0, イベントID]
-    events_p1 = np.array([[0, 0, 1]])
-    events_p2 = np.array([[0, 0, 1]])
+    start_samp_p1 = raw_p1.first_samp
+    start_samp_p2 = raw_p2.first_samp
     
-    # データの全体の長さを取得（tmaxに指定）
-    total_duration_p1 = raw_p1.times[-1]
-    total_duration_p2 = raw_p2.times[-1]
-    # 安全のため、2人のデータ長のうち短い方に合わせる
-    task_duration = min(total_duration_p1, total_duration_p2)
+    events_p1 = np.array([[start_samp_p1, 0, 1]])
+    events_p2 = np.array([[start_samp_p2, 0, 1]])
     
+    # 【修正2】時間(times)の参照ではなく、実際の総サンプル数(n_times)から安全な長さを計算する
+    min_samples = min(raw_p1.n_times, raw_p2.n_times)
+    task_duration = (min_samples - 1) / sfreq
+
     # 全時間をそのまま切り出す（1エポック化）
-    epochs_p1 = mne.Epochs(raw_p1, events_p1, tmin=0, tmax=task_duration, baseline=None, preload=True, verbose=False)
-    epochs_p2 = mne.Epochs(raw_p2, events_p2, tmin=0, tmax=task_duration, baseline=None, preload=True, verbose=False)
+    epochs_p1 = mne.Epochs(raw_p1, events_p1, tmin=0, tmax=task_duration, baseline=None, preload=True, verbose=False, reject_by_annotation=False)
+    epochs_p2 = mne.Epochs(raw_p2, events_p2, tmin=0, tmax=task_duration, baseline=None, preload=True, verbose=False, reject_by_annotation=False)
     
     # 2人のチャンネル名が重複しないよう、末尾に _p1, _p2 を付与してリネーム
     mne.rename_channels(epochs_p1.info, {ch: f"{ch}_p1" for ch in epochs_p1.ch_names})
     mne.rename_channels(epochs_p2.info, {ch: f"{ch}_p2" for ch in epochs_p2.ch_names})
     
     # 2人の電極を1つのデータ構造に合体
-    combined_epochs = mne.add_channels_epochs([epochs_p1, epochs_p2])
+    combined_epochs = epochs_p1.add_channels([epochs_p2])
     
     return combined_epochs, sfreq
 

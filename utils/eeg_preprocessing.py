@@ -234,8 +234,11 @@ def apply_filters(raw, bandpass_low=1.0, bandpass_high=60.0, notch_freqs=None):
         l_freq=bandpass_low, h_freq=bandpass_high, fir_design='firwin'
     )
 
-    # 電源ノイズ用ノッチフィルタ
-    raw_filtered.notch_filter(freqs=notch_freqs)
+    # 電源ノイズ除去
+    # MATLAB版(EEGLAB)のpop_cleanlineに合わせ、帯域を丸ごと削る帯域除去
+    # フィルタではなく、マルチテーパー回帰で正弦波ノイズ成分だけを推定・
+    # 除去する方式(spectrum_fit)を使う。
+    raw_filtered.notch_filter(freqs=notch_freqs, method='spectrum_fit', verbose=False)
 
     return raw_filtered
 
@@ -380,12 +383,10 @@ def run_ica(raw, sub_num=None, cond_name=None, log_dir=None):
     )
     raw_eeg.set_channel_types({'vEOG_proxy': 'eog', 'hEOG_proxy': 'eog'})
 
-    # ハイパスフィルタ（ICA用、1Hz）
-    raw_for_ica = raw_eeg.copy().filter(
-        l_freq=1.0, h_freq=None, fir_design='firwin', verbose=False
-    )
-
     # ICA実行（EEGチャンネルのみフィット）
+    # MATLAB版(EEGLAB)はフィルタ済みデータに直接ICAをかけているため、
+    # それに合わせてICA用の追加ハイパスフィルタは挟まず、apply_filters()で
+    # 既に1-60Hzバンドパス・電源ノイズ除去済みのraw_eegに直接fitする。
     # ⑦ 以下のパラメータは解析条件に応じて変更する（冒頭の定数を参照）
     ica = ICA(
         n_components=ICA_VARIANCE_RATIO,
@@ -393,7 +394,7 @@ def run_ica(raw, sub_num=None, cond_name=None, log_dir=None):
         method=ICA_METHOD,
         fit_params=dict(extended=True)
     )
-    ica.fit(raw_for_ica.pick_types(eeg=True))  # raw_for_ica は既にcopy済みのため.copy()不要
+    ica.fit(raw_eeg, picks='eeg', verbose=False)
     print(f"  ICA成分数: {ica.n_components_}")
 
     # --- 自動検出 ---

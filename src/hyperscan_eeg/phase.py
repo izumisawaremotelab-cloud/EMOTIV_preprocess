@@ -38,6 +38,16 @@ def combine_dyad_raw(
     双方のチャンネル名が衝突しないよう `suffix_a` / `suffix_b` を付与した上で
     1つのRawオブジェクトにまとめる。区間長が異なる場合は短い方に合わせる。
 
+    2者は別人であり頭部形状（dig/モンタージュ）は本質的に一致しないため、
+    結合前に両者のモンタージュを外す。`add_channels` はチャンネル数分の
+    `info['dig']` が完全一致することを要求する仕様（MNEの
+    `_merge_info`）で、実データ同士では一致し得ず
+    "Measurement infos are inconsistent for dig" で必ず失敗するため。
+    結合後のRawは接続性算出（チャンネル時系列とsfreqのみ使用）にしか
+    使わないので、モンタージュを外しても後段に影響しない
+    （電極配置の目視確認は `run_subject_preprocessing` 側で
+    結合前に別途行っている）。
+
     Raises:
         ValueError: サンプリング周波数が一致しない場合。
     """
@@ -52,6 +62,8 @@ def combine_dyad_raw(
 
     raw_a_cropped = raw_a.copy().crop(tmin=0, tmax=duration)
     raw_b_cropped = raw_b.copy().crop(tmin=0, tmax=duration)
+    raw_a_cropped.set_montage(None)
+    raw_b_cropped.set_montage(None)
 
     raw_a_cropped.rename_channels({ch: f"{ch}{suffix_a}" for ch in raw_a_cropped.ch_names})
     raw_b_cropped.rename_channels({ch: f"{ch}{suffix_b}" for ch in raw_b_cropped.ch_names})

@@ -12,9 +12,10 @@ from .config import FrequencyBand
 
 # EMOTIV Flex Saline 32ch のデジタイザ収録順（MATLAB由来の順序）。
 EMOTIV_FLEX_SALINE_32CH_LABELS: tuple[str, ...] = (
-    "Cz", "Fz", "Fp1", "F7", "F3", "FC1", "C3", "FC5", "FT9", "T7",
-    "CP5", "CP1", "P3", "P7", "PO9", "O1", "Pz", "Oz", "O2", "PO10",
-    "P8", "P4", "CP2", "CP6", "T8", "FT10", "FC6", "C4", "FC2", "F4", "F8", "Fp2",
+    "C4", "T8", "FC2", "FC6", "FT10", "F4", "F8", "Fp2",
+    "Oz", "Fz", "O2", "PO10", "P4", "P8", "CP2", "CP6",
+    "C3", "T7", "FC1", "FC5", "FT9", "F3", "F7", "Fp1",
+    "Pz", "Cz", "O1", "PO9", "P3", "P7", "CP1", "CP5",
 )
 
 # EMOTIV Flex Saline が出力する非EEG（補助）チャンネルの接頭辞。

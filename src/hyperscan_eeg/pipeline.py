@@ -66,15 +66,31 @@ def run_subject_preprocessing(
     )
 
     raw_eeg = preprocessing.select_eeg_channels(raw_task, aux_prefixes)
-    raw_filtered = preprocessing.apply_bandpass_notch(raw_eeg, filter_cfg)
 
-    ica = preprocessing.fit_ica(raw_filtered, ica_cfg)
+    # ICLabelは1-100Hzバンドパス・平均参照済みデータでのICA fitを前提とする
+    # （詳細は `preprocessing._ica_fit_raw` を参照）。use_iclabel時は、fit・
+    # 自動判定・（対話確認時の）GUI確認・適用までを一貫してプロジェクトの
+    # 解析用バンドパス適用前の raw_eeg（ブロードバンド）に対して行い、
+    # ICA適用後のクリーンなデータに解析用バンドパス（既定60Hzローパス+
+    # ノッチ）をかける。use_iclabel=False（手動レビューのみ）の場合は従来
+    # 通り、先にバンドパスをかけてからICAをfit・適用する。
+    bandpass_before_ica = not ica_cfg.use_iclabel
+    ica_input = (
+        preprocessing.apply_bandpass_notch(raw_eeg, filter_cfg) if bandpass_before_ica else raw_eeg
+    )
+
+    ica = preprocessing.fit_ica(ica_input, ica_cfg)
+    if ica_cfg.use_iclabel:
+        preprocessing.label_ica_iclabel(ica, ica_input, ica_cfg)
     if ica_cfg.interactive:
-        preprocessing.review_ica_interactively(ica, raw_filtered)
-    raw_clean = preprocessing.apply_ica(raw_filtered, ica)
+        preprocessing.review_ica_interactively(ica, ica_input)
+    ica_cleaned = preprocessing.apply_ica(ica_input, ica)
+    raw_clean = (
+        ica_cleaned if bandpass_before_ica else preprocessing.apply_bandpass_notch(ica_cleaned, filter_cfg)
+    )
     visualization.plot_ica_overlay(
         ica,
-        raw_filtered,
+        ica_input,
         save_path=paths.figures_dir / condition / f"sub{subject}_ica_overlay.png",
         show=ica_cfg.interactive,
     )

@@ -111,11 +111,37 @@ def apply_bandpass_notch(raw: mne.io.BaseRaw, filter_cfg: FilterConfig) -> mne.i
     return raw_filtered
 
 
-def fit_ica(raw: mne.io.BaseRaw, ica_cfg: ICAConfig) -> mne.preprocessing.ICA:
-    """ハイパスフィルタ済みコピー上でICAをフィットする（適用はしない）。"""
+def _ica_fit_raw(raw: mne.io.BaseRaw, ica_cfg: ICAConfig) -> mne.io.BaseRaw:
+    """ICAのフィットおよび`label_ica_iclabel`での分類に使う前処理済みコピーを作る。
+
+    `ica_cfg.use_iclabel` が False の場合は、`ica_highpass` Hzのハイパスの
+    みを適用する。
+
+    True の場合は、ICLabelの前提に合わせて明示的に `h_freq=100.0` のローパスと平均参照を
+    追加で適用する。そのため、この関数には**プロジェクトの解析用バンドパス
+    （例: 60Hzローパス）をまだ適用していない `raw`** を渡すこと。既に60Hz等
+    でローパス済みのデータに `h_freq=100.0` を指定しても、60Hz超の情報は
+    filter()の呼び出し前から失われているため、`info['lowpass']=100`という
+    メタデータ上のつじつまは合うが、ICLabelが実際に活用できる高周波成分
+    （筋電アーチファクト等の判別に有効）は増えない。
+    """
+    h_freq = 100.0 if ica_cfg.use_iclabel else None
     raw_for_ica = raw.copy().filter(
-        l_freq=ica_cfg.ica_highpass, h_freq=None, fir_design="firwin", verbose=False
+        l_freq=ica_cfg.ica_highpass, h_freq=h_freq, fir_design="firwin", verbose=False
     )
+    if ica_cfg.use_iclabel:
+        raw_for_ica.set_eeg_reference("average", verbose=False)
+    return raw_for_ica
+
+
+def fit_ica(raw: mne.io.BaseRaw, ica_cfg: ICAConfig) -> mne.preprocessing.ICA:
+    """フィルタ済みコピー上でICAをフィットする（適用はしない）。
+
+    フィルタ内容は `_ica_fit_raw` を参照。`ica_cfg.use_iclabel=True` で
+    `label_ica_iclabel` も併用する場合は、`fit_ica` と `label_ica_iclabel` に
+    **同じ `raw`（プロジェクトの解析用バンドパス適用前のもの）** を渡すこと。
+    """
+    raw_for_ica = _ica_fit_raw(raw, ica_cfg)
     ica = mne.preprocessing.ICA(
         n_components=None,
         random_state=ica_cfg.random_state,
@@ -123,6 +149,43 @@ def fit_ica(raw: mne.io.BaseRaw, ica_cfg: ICAConfig) -> mne.preprocessing.ICA:
         fit_params=ica_cfg.fit_params,
     )
     ica.fit(raw_for_ica)
+    return ica
+
+
+def label_ica_iclabel(
+    ica: mne.preprocessing.ICA, raw: mne.io.BaseRaw, ica_cfg: ICAConfig
+) -> mne.preprocessing.ICA:
+    """MNE-ICALabel（ICLabel）でICA成分を自動分類し、ノイズ成分を`ica.exclude`に設定する。
+
+    `raw` には `fit_ica(raw, ica_cfg)` に渡したものと同じ`raw`を渡すこと
+    （`_ica_fit_raw` で同じ1-100Hzバンドパス・平均参照済みコピーを内部で
+    再構築し、ICLabelの前提データに合わせる）。
+
+    分類ラベルは "brain" / "muscle artifact" / "eye blink" / "heart beat" /
+    "line noise" / "channel noise" / "other" の7種類。既定では "brain" と
+    "other" 以外を除外対象とする（`ica_cfg.iclabel_exclude_labels`）。
+
+    Returns:
+        `exclude` が更新された同じICAオブジェクト。
+    """
+    from mne_icalabel import label_components
+
+    raw_for_label = _ica_fit_raw(raw, ica_cfg)
+    result = label_components(raw_for_label, ica, method="iclabel")
+    labels = result["labels"]
+    probs = result["y_pred_proba"]
+
+    exclude = [
+        idx
+        for idx, (label, prob) in enumerate(zip(labels, probs))
+        if label in ica_cfg.iclabel_exclude_labels and prob >= ica_cfg.iclabel_min_probability
+    ]
+    ica.exclude = exclude
+
+    for idx, (label, prob) in enumerate(zip(labels, probs)):
+        marker = " -> 除外" if idx in exclude else ""
+        logger.info("IC%03d: %s (確信度 %.2f)%s", idx, label, prob, marker)
+    logger.info("ICLabelにより除外対象と判定された成分: %s", exclude)
     return ica
 
 

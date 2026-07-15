@@ -155,37 +155,53 @@ def fit_ica(raw: mne.io.BaseRaw, ica_cfg: ICAConfig) -> mne.preprocessing.ICA:
 def label_ica_iclabel(
     ica: mne.preprocessing.ICA, raw: mne.io.BaseRaw, ica_cfg: ICAConfig
 ) -> mne.preprocessing.ICA:
-    """MNE-ICALabel（ICLabel）でICA成分を自動分類し、ノイズ成分を`ica.exclude`に設定する。
+    """MNE-ICALabel（ICLabel）でICA成分を分類し、目視確認用の補助情報として付与する。
 
     `raw` には `fit_ica(raw, ica_cfg)` に渡したものと同じ`raw`を渡すこと
     （`_ica_fit_raw` で同じ1-100Hzバンドパス・平均参照済みコピーを内部で
     再構築し、ICLabelの前提データに合わせる）。
 
     分類ラベルは "brain" / "muscle artifact" / "eye blink" / "heart beat" /
-    "line noise" / "channel noise" / "other" の7種類。既定では "brain" と
-    "other" 以外を除外対象とする（`ica_cfg.iclabel_exclude_labels`）。
+    "line noise" / "channel noise" / "other" の7種類。確信度がわずかでも
+    非brainラベルに割り当てられた成分を機械的に除外すると過剰除去に
+    つながりかねないため、**`ica.exclude` は自動では設定しない**。代わりに
+    各成分の分類結果を `review_ica_interactively` のGUI上の成分名に
+    `ICA000 [eye:92%]` のように付記し、目視判断の補助材料として使う
+    （実際の除外はGUI上の手動選択で行う）。
 
     Returns:
-        `exclude` が更新された同じICAオブジェクト。
+        `_ica_names`（GUI表示名）が更新された同じICAオブジェクト。
     """
     from mne_icalabel import label_components
+
+    if not ica_cfg.interactive:
+        logger.warning(
+            "use_iclabel=True ですが interactive=False のため、ICLabelの分類結果は"
+            "目視確認なしでは ica.exclude に反映されません（成分は除去されません）。"
+        )
 
     raw_for_label = _ica_fit_raw(raw, ica_cfg)
     result = label_components(raw_for_label, ica, method="iclabel")
     labels = result["labels"]
     probs = result["y_pred_proba"]
 
-    exclude = [
-        idx
-        for idx, (label, prob) in enumerate(zip(labels, probs))
-        if label in ica_cfg.iclabel_exclude_labels and prob >= ica_cfg.iclabel_min_probability
-    ]
-    ica.exclude = exclude
-
+    short_labels = {
+        "brain": "brain",
+        "muscle artifact": "muscle",
+        "eye blink": "eye",
+        "heart beat": "heart",
+        "line noise": "line",
+        "channel noise": "chan",
+        "other": "other",
+    }
     for idx, (label, prob) in enumerate(zip(labels, probs)):
-        marker = " -> 除外" if idx in exclude else ""
-        logger.info("IC%03d: %s (確信度 %.2f)%s", idx, label, prob, marker)
-    logger.info("ICLabelにより除外対象と判定された成分: %s", exclude)
+        logger.info("IC%03d: %s (確信度 %.2f)", idx, label, prob)
+        short = short_labels.get(label, label)
+        # plot_sources() は ica._ica_names をGUI上の成分名として表示するため、
+        # ここに分類ラベルを書き込んで目視確認時の補助情報とする
+        # （MNEの非公開属性への依存だが、表示用途のみで解析結果には影響しない）。
+        ica._ica_names[idx] = f"{ica._ica_names[idx]} [{short}:{prob:.0%}]"
+
     return ica
 
 

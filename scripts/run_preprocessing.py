@@ -26,6 +26,9 @@ logger = logging.getLogger(__name__)
 # ============================== 実行制御パラメータ ==============================
 FILTER_CFG = FilterConfig(l_freq=1.0, h_freq=60.0, notch_freqs=(50.0, 100.0))
 ICA_CFG = ICAConfig(interactive=True)  # バッチ実行時は False にして目視確認を省略
+# ICLabelでノイズ成分を自動判定したい場合は use_iclabel=True を追加する
+# （interactive=True と併用すると、自動判定後にGUIで目視確認・修正できる）
+# 例: ICAConfig(interactive=True, use_iclabel=True)
 # ==================================================================================
 
 

@@ -38,6 +38,11 @@ def preprocess_main() -> None:
     parser.add_argument("--subject", type=int, required=True)
     parser.add_argument("--condition", type=str, required=True)
     parser.add_argument("--non-interactive", action="store_true", help="ICA成分の目視確認を省略する")
+    parser.add_argument(
+        "--use-iclabel",
+        action="store_true",
+        help="MNE-ICALabelでICA成分を自動分類し、ノイズ成分を自動で除外対象にする",
+    )
     parser.add_argument("--config-module", type=str, default="configs.gattai_hyperscan_study")
     args = parser.parse_args()
 
@@ -45,7 +50,7 @@ def preprocess_main() -> None:
     cfg = _load_config_module(args.config_module)
     from .config import ICAConfig
 
-    ica_cfg = ICAConfig(interactive=not args.non_interactive)
+    ica_cfg = ICAConfig(interactive=not args.non_interactive, use_iclabel=args.use_iclabel)
     run_subject_preprocessing(
         subject=args.subject,
         condition=args.condition,

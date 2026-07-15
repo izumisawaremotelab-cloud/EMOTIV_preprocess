@@ -126,6 +126,14 @@ class ICAConfig:
     fit_params: dict = field(default_factory=lambda: {"extended": True})
     ica_highpass: float = 1.0
     interactive: bool = True
+    # True の場合、ICAフィット前に平均参照を適用したうえで（ICLabelの学習前提に
+    # 合わせるため）MNE-ICALabelで各成分を brain/eye blink/muscle artifact 等に
+    # 自動分類する。ただし ica.exclude は自動では設定しない（確信度が低くても
+    # 該当ラベルなら除外、という挙動を避けるため）。分類ラベルと確信度は
+    # ログに出力されるほか、review_ica_interactively のGUI上で各成分名に
+    # 付記され、目視判断の補助材料として使う。実際の除外はGUI上の手動選択
+    # （interactive=True）で行うこと。
+    use_iclabel: bool = True
 
 
 @dataclass(frozen=True)

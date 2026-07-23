@@ -57,6 +57,7 @@ def preprocess_main() -> None:
         paths=cfg.PATHS,
         marker_cfg=cfg.MARKER_CFG,
         montage_cfg=cfg.MONTAGE_CFG,
+        segment_plan=cfg.DESIGN.condition_segments.get(args.condition),
         ica_cfg=ica_cfg,
     )
 

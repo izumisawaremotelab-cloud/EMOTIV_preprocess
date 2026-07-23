@@ -7,6 +7,7 @@ from pathlib import Path
 
 import mne
 import numpy as np
+import pandas as pd
 
 from .config import MontageConfig
 
@@ -25,27 +26,136 @@ def load_raw_eeg(path: Path) -> mne.io.BaseRaw:
     return mne.io.read_raw_bdf(path, preload=True, verbose=False)
 
 
-def get_marker_events(raw: mne.io.BaseRaw, field_index: int = 1) -> np.ndarray:
-    """アノテーションからイベント配列（サンプル, 0, マーカー値）を抽出する。
+def _marker_from_description(description: str, field_index: int) -> int | None:
+    parts = description.split(",")
+    if len(parts) <= field_index:
+        return None
+    try:
+        return int(parts[field_index])
+    except ValueError:
+        return None
+
+
+def _events_from_csv(raw: mne.io.BaseRaw, csv_file: Path) -> np.ndarray:
+    """補正CSVを検証し、MNE events配列へ変換する。"""
+    df = pd.read_csv(csv_file)
+    required_columns = {"latency", "marker_value"}
+    missing = required_columns.difference(df.columns)
+    if missing:
+        raise ValueError(
+            f"マーカーCSVに必須列がありません: {csv_file} "
+            f"(不足: {', '.join(sorted(missing))})"
+        )
+    if df.empty:
+        raise ValueError(f"マーカーCSVが空です: {csv_file}")
+
+    try:
+        latencies = pd.to_numeric(df["latency"], errors="raise").to_numpy(dtype=float)
+        marker_values = pd.to_numeric(
+            df["marker_value"], errors="raise"
+        ).to_numpy(dtype=float)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            f"マーカーCSVのlatency/marker_valueに数値以外が含まれます: {csv_file}"
+        ) from exc
+
+    if not np.all(np.isfinite(latencies)) or not np.all(np.isfinite(marker_values)):
+        raise ValueError(f"マーカーCSVに欠損値または無限値があります: {csv_file}")
+    if np.any(latencies < 0):
+        raise ValueError(f"マーカーCSVに負のlatencyがあります: {csv_file}")
+    if not np.all(marker_values == np.round(marker_values)):
+        raise ValueError(f"marker_valueは整数である必要があります: {csv_file}")
+    if np.any(np.diff(latencies) < 0):
+        raise ValueError(f"マーカーCSVのlatencyが時系列順ではありません: {csv_file}")
+
+    samples = (
+        np.round(latencies * raw.info["sfreq"]).astype(int) + raw.first_samp
+    )
+    last_sample = raw.first_samp + raw.n_times - 1
+    if np.any(samples < raw.first_samp) or np.any(samples > last_sample):
+        raise ValueError(
+            f"マーカーCSVにBDF記録範囲外のイベントがあります: {csv_file}"
+        )
+
+    events = np.column_stack(
+        [
+            samples,
+            np.zeros(len(df), dtype=int),
+            marker_values.astype(int),
+        ]
+    )
+    if len(np.unique(events[:, [0, 2]], axis=0)) != len(events):
+        raise ValueError(
+            f"マーカーCSVに同一サンプル・同一IDの重複があります: {csv_file}"
+        )
+    return events
+
+
+def _replace_marker_annotations(
+    raw: mne.io.BaseRaw,
+    events: np.ndarray,
+    field_index: int,
+) -> None:
+    """CSV補正イベントをRawへ反映し、FIF保存後にも引き継げるようにする。"""
+    keep = np.array(
+        [
+            _marker_from_description(str(description), field_index) is None
+            for description in raw.annotations.description
+        ],
+        dtype=bool,
+    )
+    preserved = raw.annotations[keep]
+    event_desc = {
+        int(marker): f"InletPort,{int(marker)},-1,csv"
+        for marker in np.unique(events[:, 2])
+    }
+    corrected = mne.annotations_from_events(
+        events,
+        sfreq=raw.info["sfreq"],
+        event_desc=event_desc,
+        first_samp=raw.first_samp,
+        orig_time=raw.info["meas_date"],
+    )
+    raw.set_annotations(preserved + corrected)
+
+
+def get_marker_events(
+    raw: mne.io.BaseRaw,
+    csv_file: Path | None = None,
+    allowed_markers: set[int] | None = None,
+    field_index: int = 1,
+) -> np.ndarray:
+    """CSV補正またはBDF AnnotationsからMNE events配列を取得する。
 
     アノテーションの記述形式はカンマ区切りを想定し、``field_index`` はマーカー番号のフィールド位置
-    （0始まり）を指定する。
+    （0始まり）を指定する。存在する補正CSVを優先し、補正イベントをRawの
+    Annotationsにも反映するため、後段で保存したFIFから同じイベントを復元できる。
+    ``allowed_markers`` を指定した場合、開始・終了・境界など解析に必要なIDだけを返す。
+
     Raises:
-        ValueError: マーカーを含むアノテーションが1件も見つからない場合。
+        ValueError: CSVが不正、または必要なマーカーが見つからない場合。
     """
+    if csv_file is not None and csv_file.exists():
+        events = _events_from_csv(raw, csv_file)
+        _replace_marker_annotations(raw, events, field_index)
+        logger.info("補正CSVのイベントを使用します: %s", csv_file)
+    else:
+        events, _ = mne.events_from_annotations(
+            raw,
+            event_id=lambda description: _marker_from_description(
+                description, field_index
+            ),
+            verbose=False,
+        )
+        logger.info("BDF内Annotationsのイベントを使用します。")
 
-    def _extract_marker(description: str) -> int | None:
-        parts = description.split(",")
-        if len(parts) <= field_index:
-            return None
-        try:
-            return int(parts[field_index])
-        except ValueError:
-            return None
-
-    events, _ = mne.events_from_annotations(raw, event_id=_extract_marker, verbose=False)
+    if allowed_markers is not None:
+        events = events[np.isin(events[:, 2], list(allowed_markers))]
     if events.size == 0:
-        raise ValueError("有効なマーカーを含むアノテーションが見つかりません。")
+        raise ValueError(
+            "解析対象のマーカーを含むイベントが見つかりません。"
+            f" allowed_markers={allowed_markers}"
+        )
     return events
 
 

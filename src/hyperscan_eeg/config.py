@@ -43,6 +43,7 @@ class PathConfig:
     """
 
     raw_dir: Path = Path("data/raw")
+    marker_dir: Path = Path("markerdata")
     digitizer_dir: Path = Path("data/digitizer")
     preprocessed_dir: Path = Path("data/preprocessed")
     results_dir: Path = Path("data/results")
@@ -50,6 +51,9 @@ class PathConfig:
 
     def raw_file(self, subject: int, condition: str) -> Path:
         return self.raw_dir / condition / f"sub{subject}.bdf"
+
+    def marker_file(self, subject: int, condition: str) -> Path:
+        return self.marker_dir / f"sub{subject:02d}_{condition}.csv"
 
     def digitizer_file(self, subject: int) -> Path:
         return self.digitizer_dir / f"sub{subject}.TXT"

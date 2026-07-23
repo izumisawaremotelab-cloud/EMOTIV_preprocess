@@ -24,6 +24,7 @@ from hyperscan_eeg.presets import EMOTIV_FLEX_SALINE_32CH_LABELS, STANDARD_EEG_F
 
 PATHS = PathConfig(
     raw_dir=Path("data/raw"),
+    marker_dir=Path("markerdata"),
     digitizer_dir=Path("data/digitizer"),
     preprocessed_dir=Path("data/preprocessed"),
     results_dir=Path("data/results"),

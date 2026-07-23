@@ -40,7 +40,16 @@ scripts/
   run_analysis.py       同期指標算出実行スクリプト（同上）
 
 data/                 raw / digitizer / preprocessed / results / figures
+markerdata/           補正イベントCSV（例: sub04_silent.csv、存在する場合のみ優先）
 ```
+
+## 補正イベントCSV
+
+イベントに異常があるBDFだけ、`markerdata/subNN_condition.csv` を配置する。
+CSVが存在すれば `latency`（BDF開始からの秒）と `marker_value`（イベントID）
+からイベントを作成し、存在しなければBDF内Annotationsを使用する。補正イベントは
+前処理済みFIFのAnnotationsにも保存される。解析対象外のマーカーは、設定された
+開始・終了・境界マーカーに基づいて除外される。
 
 ## 実行
 
@@ -48,6 +57,17 @@ data/                 raw / digitizer / preprocessed / results / figures
 python scripts/run_preprocessing.py
 python scripts/run_analysis.py
 ```
+
+前処理済み波形を全被験者・全条件について順番に確認する場合:
+
+```bash
+python scripts/review_preprocessed.py
+```
+
+表示ウィンドウを閉じると次の被験者へ進む。被験者・条件や表示時間幅を
+限定する場合は、例えば
+`python scripts/review_preprocessed.py --subjects 4 5 6 --conditions silent --duration 30`
+のように指定する。
 
 実験固有パラメータ（被験者・ペア対応・条件・マーカーコード・ゲーム状態の
 区間分割）は `configs/gattai_hyperscan_study.py` を編集する。

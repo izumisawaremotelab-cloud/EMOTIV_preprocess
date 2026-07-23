@@ -1,4 +1,6 @@
 data/
+.venv/
+markerdata/*
 __pycache__/
 .vscode/
 logs/

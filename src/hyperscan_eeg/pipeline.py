@@ -35,6 +35,7 @@ def run_subject_preprocessing(
     paths: PathConfig,
     marker_cfg: MarkerConfig,
     montage_cfg: MontageConfig,
+    segment_plan: SegmentPlan | None = None,
     filter_cfg: FilterConfig = FilterConfig(),
     ica_cfg: ICAConfig = ICAConfig(),
     aux_prefixes: tuple[str, ...] = EMOTIV_AUX_CHANNEL_PREFIXES,
@@ -53,7 +54,14 @@ def run_subject_preprocessing(
     logger.info("=== 前処理開始: subject%d / %s ===", subject, condition)
 
     raw = io.load_raw_eeg(paths.raw_file(subject, condition))
-    events = io.get_marker_events(raw)
+    allowed_markers = {marker_cfg.start_marker, marker_cfg.end_marker}
+    if segment_plan is not None:
+        allowed_markers.update(segment_plan.boundary_markers)
+    events = io.get_marker_events(
+        raw,
+        csv_file=paths.marker_file(subject, condition),
+        allowed_markers=allowed_markers,
+    )
     raw_task = preprocessing.crop_to_task_window(raw, events, marker_cfg)
 
     montage = io.build_dig_montage(subject, paths.digitizer_dir, montage_cfg)

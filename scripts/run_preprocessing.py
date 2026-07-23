@@ -44,6 +44,7 @@ def main() -> None:
                     paths=PATHS,
                     marker_cfg=MARKER_CFG,
                     montage_cfg=MONTAGE_CFG,
+                    segment_plan=DESIGN.condition_segments.get(condition),
                     filter_cfg=FILTER_CFG,
                     ica_cfg=ICA_CFG,
                 )
